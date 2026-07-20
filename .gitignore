@@ -52,6 +52,15 @@ data/backup/
 
 # Internal docs (plans, specs)
 docs/
+!docs/
+docs/*
+!docs/architecture/
+docs/architecture/*
+!docs/architecture/*.md
+!docs/research/
+docs/research/**
+!docs/research/**/
+!docs/research/**/*.md
 !wiki/docs/
 !wiki/docs/**
 docs/screenshots/agent-run.png
