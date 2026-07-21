@@ -1,96 +1,105 @@
-# HQATL — Elliott Trade-Policy Experiment Matrix
+# HQATL — Elliott Trade-Policy Experiment Matrix (v2)
 
 **RESEARCH DRAFT · NOT HQATL VERIFIED · NOT A SPECIFICATION · NOT AUTHORIZED FOR IMPLEMENTATION**
 
 - **Prepared for:** the HQATL build track, after the causal-swing fix (F1) + tests (B1) + first corrected baseline.
-- **Premise (from the baseline run):** the current policy converts every completion *alert* into a **1-bar position** (avg holding = exactly 1 bar; Sharpe 0.14; 3/5 windows). This tests the **trade interpretation**, not Elliott itself. This matrix defines explicit, falsifiable trade policies to run against the **same detected structures** once detection / events / trade-lifecycle are separated (Codex's next target).
+- **v2 note:** incorporates Codex's engineering corrections (2026‑07‑21). Changes are marked **[Codex]**.
+- **Premise (from the baseline run):** the current policy converts every completion *alert* into a **1-bar position** (avg holding = exactly 1 bar; Sharpe 0.14; 3/5 windows). This tests the **trade interpretation**, not Elliott itself. This matrix defines explicit, falsifiable trade policies to run against the **same detected structures** once detection / events / trade-lifecycle are separated.
 - **Rule:** change **one thing at a time** vs a frozen baseline; keep a policy only if evidence supports it.
 
 ---
 
-## 1. Prerequisite: the three-layer contract
+## 1. Prerequisite: the three-layer contract  **[Codex — refined]**
 
-The policies below assume Codex's split. Concretely, the detector should emit an **event stream** (not signals), each event carrying enough for any policy to act:
+1. **Detection** — causal pivots + *candidate* structures (no look-ahead).
+2. **Events** — *confirmed* analytical interpretations and **invalidations** (e.g. "impulse completed," "count invalidated").
+3. **Trade policy** — converts *selected* events into positions.
+
+Each event carries enough for any policy to act:
 
 ```
 ElliottEvent {
   timestamp            # bar the event is CONFIRMED on (post causal-lag, no look-ahead)
-  type                 # IMPULSE_COMPLETE | ABC_COMPLETE | (later: WAVE3_IN_PROGRESS, ...)
-  direction            # UP (5-up done / ABC-up done) | DOWN (5-down done / ABC-down done)
+  type                 # IMPULSE_COMPLETE | ABC_COMPLETE | INVALIDATION | (later: WAVE1_2_SET, WAVE3_* ...)
+  direction            # UP | DOWN  (direction of the completed structure)
   p0..p5 / pa..pc      # the pivot prices/times the structure is built from
-  invalidation_level   # structural stop (e.g. beyond wave-5 end, or beyond C)
-  fib_targets[]        # projected corrective/continuation targets
+  invalidation_level   # structural stop (later layer)
+  fib_targets[]        # projected targets (later layer)
 }
 ```
 
-A **trade policy** is a pure function `events + price -> positions`. Detection never changes across the matrix — only the policy does. This is what lets the desk *show* counts without auto-trading them (governance: "decision support, not autonomous authority").
+A **trade policy** is a pure function `events + price -> positions`. Detection never changes across the matrix — only the policy does. This lets the desk *show* counts without auto-trading them (governance: "decision support, not autonomous authority").
 
 ---
 
-## 2. Baselines / controls (run these first, they anchor everything)
+## 2. Baselines / controls
 
 | ID | Baseline | Purpose |
 |---|---|---|
-| **C0** | **Current 1-bar flip** (frozen) | the thing we're trying to beat; reproduces the 3.05% run |
-| **C1** | **Buy-and-hold** each instrument | absolute yardstick (was ~310% — a bull-market ceiling, not the real bar) |
-| **C2** | **Matched-random** — same trade count (~49) & holding-period distribution as the policy under test, entries at random timestamps, N≥1000 resamples | **the key control:** isolates whether Elliott *timing* adds anything beyond trade frequency |
+| **C0** | **Current 1-bar flip** (frozen, preserved) | the thing we're trying to beat; reproduces the 3.05% run |
+| **C1** | **Buy-and-hold** — **per instrument AND as an equal-weight portfolio [Codex]** | absolute yardstick (bull-market ceiling, not the real bar) |
+| **C2** | **Matched-random** control | isolates whether Elliott *timing* adds anything |
 
-**Decision rule (applies to every policy P):** keep P only if it beats **C2 on Sharpe** (outside the random band, e.g. >95th percentile) **and** holds up across a majority of sequential windows **out-of-sample**. Beating C1 is a bonus, not required (an occasional-signal strategy needn't beat leveraged-long-a-bull-market).
+**C2 must match each policy's full profile [Codex]:** symbol, **direction mix**, trade count, **holding-period distribution**, and **exposure** — not merely the number of trades. **C2 runs *after* P1a [Codex]**, because P1a determines the holding-period distribution the random trades must match. N ≥ 1000 resamples.
+
+**Decision rule:** keep a policy only if it beats **C2 on Sharpe** (outside the random band, e.g. >95th pct) **and** holds up **out-of-sample** (see §5). Beating C1 is a bonus, not required.
 
 ---
 
 ## 3. Trade policies (the experiment menu)
 
-Each consumes the same event stream. Ordered by expected value / ease.
+Ordered by dependency and expected value.
 
-| ID | Policy | Entry | Hold / Exit | Hypothesis being tested |
+| ID | Policy | Entry | Hold / Exit | Depends on |
 |---|---|---|---|---|
-| **P1** | **Hold-until-opposite** | on completion event, take the implied direction (5-up done → short/flat; ABC-down done → long) | hold until the next *opposing* completion event **or** `invalidation_level` breached | Does making it a *persistent* position (vs 1-bar) recover the edge the alert throws away? **(most direct fix — run first)** |
-| **P2** | **Target-or-stop** | on completion event | exit at `fib_targets` (projected move) **or** `invalidation_level`, whichever first; time-stop at N bars | Do the structure's own projected targets/stops define a tradable envelope? |
-| **P3** | **Trade-with-wave-3 (momentum)** | after a confirmed 1–2 sets up, enter *with* trend at start of wave 3 | exit at wave-3 completion (or trailing stop) | Flips from counter-trend tops/bottoms to riding the strongest wave — often the more tradable Elliott edge. Tests momentum vs mean-reversion framing. |
-| **P4** | **Correction-complete, long-only** | only `ABC_COMPLETE → UP` events; ignore top-shorting | hold to next opposing event / invalidation | Does the long side alone carry the edge? Dodges the structural penalty of shorting an up-drifting index. |
-| **P5** | **Confirmation-filtered** (wrapper on P1) | require a confirming close beyond a threshold (e.g. k×ATR past the pivot) *after* the event before entering | same as P1 | Do false/late completions explain the weak win rate? Trades quality for quantity. |
-| **P6** | **Regime-gated** (wrapper on best of P1–P4) | only act when a trend filter is on (e.g. ADX>25 / above long MA); else flat | same as wrapped policy | Tests the RQ-002/RQ-003 "regime-dependence" idea empirically — *now a hypothesis, not a mandate*. |
+| **P1a** | **Hold-until-opposite** *(run first)* | on a confirmed completion event, take the implied direction | hold until the next **opposing confirmed event** — **no stop yet [Codex]** | events layer only |
+| **P1b** | **P1a + structural invalidation** | same as P1a | also exit on `invalidation_level` breach | **run only after P1a is kept [Codex]** (adds one variable) |
+| **P4** | **Correction-complete → long** | **completed *downward* ABC event → open a *long* [Codex, disambiguated]** | hold to next opposing event | events layer |
+| **P3** | **Trade-with-wave-3 (momentum)** | enter with trend at start of wave 3 | exit at wave-3 completion / trailing stop | **needs partial Wave 1–2 + Wave-3 events to exist first [Codex]** |
+| **P2** | **Target-or-stop** | on completion event | exit at `fib_targets` or `invalidation_level` | **needs structural targets + invalidations to exist first [Codex]** |
+| **P5** | **Confirmation-filtered** (wrapper) | require a confirming close past the pivot before entering | as wrapped policy | run on the winning policy |
+| **P6** | **Regime-gated** (wrapper) | act only when a trend filter is on; else flat | as wrapped policy | run on the winning policy |
 
-**Variable-isolation note:** P5 and P6 are *wrappers* — run them only on top of whichever of P1–P4 wins, so each experiment changes one lever.
-
----
-
-## 4. Optional detection variants (only if P1–P4 plateau)
-
-These re-open the earlier "five disagreements" **as experiments**, each a one-line change tested against the frozen baseline:
-
-- **D1 — close vs wick pivots** (the biggest RQ-002↔EWCore disagreement): swing extremes from `close` vs `high/low`.
-- **D2 — min price-move filter** (audit F5): add %/ATR threshold to swing detection.
-- **D3 — Fib tolerance tightness** (audit F4): sweep `fib_tolerance`.
-- **D4 — wave-5 ratio check** (audit F2): add the W5≈W1 constraint the SKILL.md claims.
-
-Run these **after** a trade policy works — changing detection and policy at once confounds results.
+**Variable-isolation:** P5/P6 are wrappers — run only on top of whichever base policy wins.
 
 ---
 
-## 5. Evaluation protocol (hold constant across all runs)
+## 4. Optional detection variants (only after a trade policy shows value)
 
-- **Instruments/period:** same SPY/QQQ/AAPL 2018–2025 for comparability, **plus** at least one out-of-sample set (different tickers and/or an earlier period) before keeping anything.
-- **Execution:** next-bar fill, slippage, costs — identical to the baseline harness already used.
-- **No look-ahead:** every event confirmed post causal-lag (the F1 fix); tests assert signal timing has no future dependence.
-- **Metrics (per run):** total & annual return, max drawdown, Sharpe, trades, win rate, **avg holding period** (watch this — it's the tell), profitable windows k/5.
-- **Robustness:** Monte Carlo + bootstrap + sequential-window validation (as already run) **and C2 matched-random** for that policy's trade count/holding.
-- **Report:** one row per (policy × instrument-set), baseline C0/C1/C2 alongside, so keep/reject is a glance.
+Each a one-line change, tested against the frozen baseline — the earlier "five disagreements" as **experiments**:
 
----
+- **D1 — close vs wick pivots** · **D2 — min price-move filter** · **D3 — Fib tolerance sweep** · **D4 — wave-5 ratio check**
 
-## 6. Suggested order of execution
-
-1. **C0, C1, C2** (anchors).
-2. **P1** (hold-until-opposite) — most likely to recover edge; directly fixes the 1-bar problem.
-3. **P4** (long-only) and **P3** (wave-3 momentum) — cheap, high-information.
-4. **P2** (target-or-stop).
-5. Wrappers **P5 / P6** on the winner.
-6. Detection variants **D1–D4** only if P-policies plateau.
-
-Stop early on any branch the moment C2 isn't beaten out-of-sample — that's the "test before trust / stand aside" discipline, applied to our own work.
+Run these **after** a policy works; changing detection and policy at once confounds results.
 
 ---
 
-*End of RESEARCH DRAFT. A menu of falsifiable experiments, not a specification. No implementation authorized; Codex owns the engineering and picks what to run.*
+## 5. Evaluation protocol
+
+- **In-sample:** SPY/QQQ/AAPL 2018–2025 for comparability.
+- **Genuine out-of-sample [Codex]:** Vibe's current sequential-window report is **not** real train/test walk-forward. Keep/reject decisions require a **separate untouched period or instrument set** the policy has never seen.
+- **Execution:** next-bar fill, slippage, costs — identical to the baseline harness.
+- **No look-ahead:** every event confirmed post causal-lag (F1); tests assert no future dependence.
+- **Metrics:** total & annual return, max drawdown, Sharpe, trades, win rate, **avg holding period** (the tell), profitable windows.
+- **Robustness:** Monte Carlo + bootstrap + **C2 matched-random** for that policy's full profile.
+
+---
+
+## 6. Corrected order of execution  **[Codex]**
+
+1. **Preserve C0** — the completed one-bar baseline.
+2. **C1 buy-and-hold** — per instrument *and* equal-weight portfolio.
+3. **Implement** the detection / events / trade-policy separation.
+4. **Implement P1a** — hold until an opposing confirmed event.
+5. **Run P1a.**
+6. **Run C2 matched-random** against P1a (matched to P1a's full profile).
+7. **Test P1a out-of-sample** — untouched instruments or dates.
+8. **Keep or reject P1a** on out-of-sample Sharpe vs C2.
+9. **Only then P1b** — add structural invalidation.
+10. **Delay D1–D4** until a trade policy has demonstrated value.
+
+Stop early on any branch the moment C2 isn't beaten out-of-sample — "test before trust / stand aside," applied to our own work.
+
+---
+
+*End of RESEARCH DRAFT. A menu of falsifiable experiments, not a specification. No implementation authorized; Codex owns the engineering and picks what to run. The next coding task is the three-layer split, preserving C0 for comparison.*
