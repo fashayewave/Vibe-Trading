@@ -92,6 +92,24 @@ Implementation
 - **Research purpose:** Preserve the EWCore Pine file as an HQATL research asset for later evidence review without approving or adopting its contents.
 - **Repository location:** `docs/research/source_documents/EWCore_0.1.5.4.pine`
 
+### Registered Web Source: The Implementation of Automatic Analysis of the Elliott Waves in MQL5
+
+- **Source title:** The Implementation of Automatic Analysis of the Elliott Waves in MQL5
+- **Publisher:** MQL5 Articles / MetaTrader 5 Examples
+- **Author attribution:** The current article page displays the author as deleted.
+- **Publication date:** 30 March 2011
+- **Source type:** External technical article and reference implementation
+- **Research division:** Elliott Wave Intelligence
+- **Inventory:** `Complete`
+- **Registration:** `Complete`
+- **Review status:** `PENDING EVIDENCE REVIEW`
+- **Implementation status:** `NOT IMPLEMENTED`
+- **Research purpose:** Study a prior automatic Elliott markup design that uses Zigzag vertices, enumerates candidate counts, represents nested wave degrees in a tree, distinguishes completed and unfinished structures, and prepares wave labels for chart display.
+- **HQATL intended use:** Candidate architecture and testing reference for closing the Vibe Elliott auto-labeling gap. Its structural claims and MQL5 design choices must be evaluated independently through HQATL tests before adoption.
+- **Copyright/provenance note:** Externally published MQL5 article. HQATL records the citation and a short research description without copying the article or treating its code as approved HQATL implementation.
+- **Date accessed:** 20 July 2026
+- **URL:** [https://www.mql5.com/en/articles/260](https://www.mql5.com/en/articles/260)
+
 ## 2. Market Structure
 
 `[Research entries to be added.]`
