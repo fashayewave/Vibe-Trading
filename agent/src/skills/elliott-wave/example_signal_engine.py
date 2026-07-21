@@ -46,6 +46,21 @@ class SignalEngine:
             fib_tolerance: Fibonacci 比率容差，默认 0.15。
             min_wave_bars: 每浪最少 K 线数，默认 5。
         """
+        if (
+            not isinstance(swing_window, int)
+            or isinstance(swing_window, bool)
+            or swing_window < 1
+        ):
+            raise ValueError("swing_window must be a positive integer")
+        if (
+            not isinstance(min_wave_bars, int)
+            or isinstance(min_wave_bars, bool)
+            or min_wave_bars < 1
+        ):
+            raise ValueError("min_wave_bars must be a positive integer")
+        if not 0 <= fib_tolerance < 1:
+            raise ValueError("fib_tolerance must be in the range [0, 1)")
+
         self.swing_window = swing_window
         self.fib_tolerance = fib_tolerance
         self.min_wave_bars = min_wave_bars
@@ -69,24 +84,47 @@ class SignalEngine:
         if len(high) < full_w:
             return []
 
-        # 检测局部极值
-        roll_max = high.rolling(full_w, center=True).max()
-        roll_min = low.rolling(full_w, center=True).min()
-        swing_high_mask = high == roll_max
-        swing_low_mask = low == roll_min
-
-        # 收集所有候选 Swing 点
+        # Confirm a pivot only after ``w`` completed bars have closed to its right.
+        # ``index`` remains the actual pivot time for measurement and charting;
+        # ``confirmed_index`` is the first time the pivot is knowable and therefore
+        # the earliest timestamp at which a signal may be emitted.
         raw_points = []
-        for idx in high.index:
-            is_h = bool(swing_high_mask.get(idx, False))
-            is_l = bool(swing_low_mask.get(idx, False))
+        for pivot_pos in range(w, len(high) - w):
+            left = pivot_pos - w
+            right = pivot_pos + w + 1
+            pivot_index = high.index[pivot_pos]
+            confirmed_pos = pivot_pos + w
+            confirmed_index = high.index[confirmed_pos]
+            pivot_high = high.iloc[pivot_pos]
+            pivot_low = low.iloc[pivot_pos]
+            is_h = bool(pd.notna(pivot_high) and pivot_high == high.iloc[left:right].max())
+            is_l = bool(pd.notna(pivot_low) and pivot_low == low.iloc[left:right].min())
             if is_h and is_l:
-                # 同一根K线同时是高低点，取幅度更大的
-                pass
+                # An outside/constant bar is ambiguous without a tie-break rule.
+                # Exclude it rather than silently assigning an arbitrary direction.
+                continue
             elif is_h:
-                raw_points.append({"index": idx, "price": float(high[idx]), "type": "H"})
+                raw_points.append(
+                    {
+                        "index": pivot_index,
+                        "confirmed_index": confirmed_index,
+                        "bar_pos": pivot_pos,
+                        "confirmed_bar_pos": confirmed_pos,
+                        "price": float(pivot_high),
+                        "type": "H",
+                    }
+                )
             elif is_l:
-                raw_points.append({"index": idx, "price": float(low[idx]), "type": "L"})
+                raw_points.append(
+                    {
+                        "index": pivot_index,
+                        "confirmed_index": confirmed_index,
+                        "bar_pos": pivot_pos,
+                        "confirmed_bar_pos": confirmed_pos,
+                        "price": float(pivot_low),
+                        "type": "L",
+                    }
+                )
 
         if len(raw_points) < 2:
             return raw_points
@@ -95,11 +133,10 @@ class SignalEngine:
         zigzag = [raw_points[0]]
         for pt in raw_points[1:]:
             if pt["type"] == zigzag[-1]["type"]:
-                # 连续同类型：保留更极端的
-                if pt["type"] == "H" and pt["price"] > zigzag[-1]["price"]:
-                    zigzag[-1] = pt
-                elif pt["type"] == "L" and pt["price"] < zigzag[-1]["price"]:
-                    zigzag[-1] = pt
+                # Keep the first confirmed point. Replacing it with a later,
+                # more-extreme point would rewrite historical counts when the
+                # engine is recomputed with additional future data.
+                continue
             else:
                 zigzag.append(pt)
 
@@ -159,13 +196,11 @@ class SignalEngine:
             是否每段都满足最少 K 线数。
         """
         for i in range(start, start + count - 1):
-            idx_a = swings[i]["index"]
-            idx_b = swings[i + 1]["index"]
-            if hasattr(idx_a, "value") and hasattr(idx_b, "value"):
-                # 时间戳类型，用天数差估算
-                diff = abs((idx_b - idx_a).days)
-            else:
-                diff = abs(int(idx_b) - int(idx_a))
+            pos_a = swings[i].get("bar_pos")
+            pos_b = swings[i + 1].get("bar_pos")
+            if pos_a is None or pos_b is None:
+                raise ValueError("swing points must include bar_pos")
+            diff = abs(int(pos_b) - int(pos_a))
             if diff < self.min_wave_bars:
                 return False
         return True
@@ -227,7 +262,7 @@ class SignalEngine:
                     continue
 
                 # 5浪上升完成 → 卖出信号
-                results.append((p5["index"], -1))
+                results.append((p5["confirmed_index"], -1))
 
             # --- 看跌推动浪: H, L, H, L, H, L ---
             elif types == ["H", "L", "H", "L", "H", "L"]:
@@ -263,7 +298,7 @@ class SignalEngine:
                     continue
 
                 # 5浪下跌完成 → 买入信号
-                results.append((p5["index"], 1))
+                results.append((p5["confirmed_index"], 1))
 
         return results
 
@@ -316,7 +351,7 @@ class SignalEngine:
                     continue
 
                 # ABC 下调完成 → 买入信号
-                results.append((pc["index"], 1))
+                results.append((pc["confirmed_index"], 1))
 
             # --- 看涨 ABC: L, H, L, H（上-下-上）→ 调整结束后卖出 ---
             elif types == ["L", "H", "L", "H"]:
@@ -348,7 +383,7 @@ class SignalEngine:
                     continue
 
                 # ABC 上调完成 → 卖出信号
-                results.append((pc["index"], -1))
+                results.append((pc["confirmed_index"], -1))
 
         return results
 
@@ -424,35 +459,3 @@ def _fetch_okx(
         df[col] = df[col].astype(float)
     df["volume"] = df["vol"].astype(float)
     return df
-
-
-if __name__ == "__main__":
-    symbols = ["BTC-USDT", "ETH-USDT", "SOL-USDT"]
-    data_map = {}
-
-    print("=== 艾略特波浪理论信号引擎 ===\n")
-
-    for sym in symbols:
-        print(f"获取 {sym} 数据...")
-        data_map[sym] = _fetch_okx(sym, bar="1D", limit=300)
-        print(
-            f"  {len(data_map[sym])} 根K线, "
-            f"{data_map[sym].index[0]:%Y-%m-%d} ~ "
-            f"{data_map[sym].index[-1]:%Y-%m-%d}"
-        )
-
-    engine = SignalEngine()
-    signals = engine.generate(data_map)
-
-    print("\n--- 信号统计 ---")
-    for sym in symbols:
-        sig = signals[sym]
-        buys = sig[sig == 1]
-        sells = sig[sig == -1]
-        print(f"\n{sym} ({len(data_map[sym])} 根K线):")
-        print(f"  做多信号: {len(buys)} 个")
-        print(f"  做空信号: {len(sells)} 个")
-        if len(buys) > 0:
-            print(f"  最近做多: {buys.index[-1]:%Y-%m-%d}")
-        if len(sells) > 0:
-            print(f"  最近做空: {sells.index[-1]:%Y-%m-%d}")
